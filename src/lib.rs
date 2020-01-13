@@ -70,19 +70,29 @@ fn generate_target_code(intermediate: &Vec<ByteCode>) -> Vec<u8> {
 
     // TODO allocate the memory without brk
 
-    // mov eax, 0xc
-    target.push(0xb8);
-    emit_dword(&mut target, 0xc);
-    // mov edi, 0x8000
-    target.push(0xbf);
+    // sub rsp, 0x8000
+    target.push(0x48);
+    target.push(0x81);
+    target.push(0xec);
     emit_dword(&mut target, 0x8000);
-    // syscall
-    target.push(0x0f);
-    target.push(0x05);
+    // mov rsi, rsp
+    target.push(0x48);
+    target.push(0x89);
+    target.push(0xe6);
+
+    // // mov eax, 0xc
+    // target.push(0xb8);
+    // emit_dword(&mut target, 0xc);
+    // // mov edi, 0x8000
+    // target.push(0xbf);
+    // emit_dword(&mut target, 0x8000);
+    // // syscall
+    // target.push(0x0f);
+    // target.push(0x05);
     
     // mov esi, eax
-    target.push(0x89);
-    target.push(0xc6);
+    // target.push(0x89);
+    // target.push(0xc6);
     
     for instruction in intermediate {
         match instruction {
@@ -113,12 +123,12 @@ fn generate_target_code(intermediate: &Vec<ByteCode>) -> Vec<u8> {
                 target.push(0x01);
             },
             ByteCode::WriteByte => {
-                // xor eax, eax
-                target.push(0x31);
-                target.push(0xc0);
-                // xor edi, edi
-                target.push(0x31);
-                target.push(0xff);
+                // mov eax, 0x1
+                target.push(0xb8);
+                emit_dword(&mut target, 0x01);
+                // mov edi, 0x1
+                target.push(0xbf);
+                emit_dword(&mut target, 0x01);
                 // mov edx, 0x1
                 target.push(0xba);
                 emit_dword(&mut target, 0x01);
@@ -128,12 +138,12 @@ fn generate_target_code(intermediate: &Vec<ByteCode>) -> Vec<u8> {
 
             },
             ByteCode::ReadByte => {
-                // mov eax, 0x1
-                target.push(0xb8);
-                emit_dword(&mut target, 0x01);
-                // mov edi, 0x1
-                target.push(0xbf);
-                emit_dword(&mut target, 0x01);
+                // xor eax, eax
+                target.push(0x31);
+                target.push(0xc0);
+                // xor edi, edi
+                target.push(0x31);
+                target.push(0xff);
                 // mov edx, 0x1
                 target.push(0xba);
                 emit_dword(&mut target, 0x01);
@@ -230,6 +240,20 @@ struct ProgramHeader {
     p_align: u64,
 }
 
+// #[repr(C)]
+// struct SectionHeader {
+//     sh_name: u32,
+//     sh_type: u32,
+//     sh_flags: u64,
+//     sh_addr: u64,
+//     sh_offset: u64,
+//     sh_size: u64,
+//     sh_link: u32,
+//     sh_info: u32,
+//     sh_addralign: u64,
+//     sh_entsize: u64,
+// }
+
 fn write_elf(target_code: &Vec<u8>, filename: &str) -> Result<(), Box<dyn Error>> {
     let mut elf = File::create(filename)?;
 
@@ -259,6 +283,7 @@ fn write_elf(target_code: &Vec<u8>, filename: &str) -> Result<(), Box<dyn Error>
     let elf_bytes: [u8; std::mem::size_of::<ElfHeader>()] = unsafe { 
         std::mem::transmute(elf_header) 
     };
+    elf.write_all(&elf_bytes)?;
 
     let program_header = ProgramHeader {
         p_type: 1, // loadable segment
@@ -274,9 +299,9 @@ fn write_elf(target_code: &Vec<u8>, filename: &str) -> Result<(), Box<dyn Error>
     let ph_bytes: [u8; std::mem::size_of::<ProgramHeader>()] = unsafe {
         std::mem::transmute(program_header)
     };
-    
-    elf.write_all(&elf_bytes)?;
     elf.write_all(&ph_bytes)?;
+
+
     elf.write_all(target_code)?;
     
     Ok(())
