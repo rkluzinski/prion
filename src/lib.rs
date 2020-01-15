@@ -7,12 +7,13 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(args: &[String]) -> Result<Config, &'static str> {
-        if args.len() < 2 {
-            return Err("not enough arguments")
-        }
+    pub fn new(mut args: std::env::Args) -> Result<Config, &'static str> {
+        args.next();
 
-        let filename = args[1].clone();
+        let filename = match args.next() {
+            Some(arg) => arg,
+            None => return Err("No filename given"),
+        };
 
         Ok(Config { filename })
     }
