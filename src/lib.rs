@@ -42,7 +42,7 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
             .arg(&assembly_filename)
             .arg("-o")
             .arg(&object_filename)
-            .spawn()
+            .output()
             .expect("nasm failed to start");
 
     // link
@@ -50,7 +50,7 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
             .arg(&object_filename)
             .arg("-o")
             .arg(&config.outfile)
-            .spawn()
+            .output()
             .expect("ld failed to start");
 
     Ok(())
