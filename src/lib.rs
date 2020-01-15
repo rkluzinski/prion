@@ -1,29 +1,58 @@
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::prelude::Write;
+use std::process::Command;
 
 pub struct Config {
-    pub filename: String,
+    pub infile: String,
+    pub outfile: String,
 }
 
 impl Config {
     pub fn new(mut args: std::env::Args) -> Result<Config, &'static str> {
         args.next();
 
-        let filename = match args.next() {
+        let infile = match args.next() {
             Some(arg) => arg,
-            None => return Err("No filename given"),
+            None => return Err("no input file given"),
         };
 
-        Ok(Config { filename })
+        let outfile = match args.next() {
+            Some(arg) => arg,
+            None => return Err("no output file given"),
+        };
+
+        Ok(Config { infile, outfile })
     }
 }
 
 pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
-    let source = fs::read_to_string(config.filename)?;
+    let source = fs::read_to_string(&config.infile)?;
     let intermediate_code = generate_intermediate_code(&source);
-    // optimization
-    generate_asm(&intermediate_code)?;
+    // optimization intermediate code
+
+    let assembly_filename = format!("{}.s", config.outfile);
+    let object_filename = format!("{}.o", config.outfile);
+
+    generate_assembly(&assembly_filename, &intermediate_code)?;
+
+    // assemble
+    Command::new("nasm")
+            .arg("-felf64")
+            .arg(&assembly_filename)
+            .arg("-o")
+            .arg(&object_filename)
+            .spawn()
+            .expect("nasm failed to start");
+
+    // link
+    Command::new("ld")
+            .arg(&object_filename)
+            .arg("-o")
+            .arg(&config.outfile)
+            .spawn()
+            .expect("ld failed to start");
+
     Ok(())
 }
 
@@ -60,8 +89,8 @@ fn generate_intermediate_code(source: &str) -> Vec<ByteCode> {
     intermediate
 }
 
-fn generate_asm(intermediate: &Vec<ByteCode>) -> Result<(), Box<dyn Error>> {
-    let mut out = File::create("out.asm")?;
+fn generate_assembly(filename: &String, intermediate: &Vec<ByteCode>) -> Result<(), Box<dyn Error>> {
+    let mut out = File::create(filename)?;
 
     writeln!(out, "_start:")?;
     writeln!(out, "sub rsp, 0x8000")?;
