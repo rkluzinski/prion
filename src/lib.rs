@@ -70,7 +70,7 @@ enum ByteCode {
 fn generate_intermediate_code(source: &str) -> Vec<ByteCode> {
     let mut intermediate: Vec<ByteCode> = Vec::new();
 
-    // this section should validate code as well
+    // TODO this section should validate code as well
 
     for instruction in source.chars() {
         match instruction {
@@ -92,6 +92,11 @@ fn generate_intermediate_code(source: &str) -> Vec<ByteCode> {
 fn generate_assembly(filename: &String, intermediate: &Vec<ByteCode>) -> Result<(), Box<dyn Error>> {
     let mut out = File::create(filename)?;
 
+    let mut count = 0;
+    let mut stack: Vec<i64> = Vec::new();
+
+    writeln!(out, "section .text")?;
+    writeln!(out, "global _start")?;
     writeln!(out, "_start:")?;
     writeln!(out, "sub rsp, 0x8000")?;
     writeln!(out, "mov rsi, rsp")?;
@@ -115,14 +120,18 @@ fn generate_assembly(filename: &String, intermediate: &Vec<ByteCode>) -> Result<
                 writeln!(out, "syscall")?;
             },
             ByteCode::JumpIfZero => {
-                writeln!(out, "cmp BYTE [rdx], 0")?;
-                writeln!(out, "je L")?;
-                writeln!(out, "L{}:", 0)?;
+                writeln!(out, "cmp BYTE [rsi], 0")?;
+                writeln!(out, "je L{}_", count)?;
+                writeln!(out, "L{}:", count)?;
+                stack.push(count);
+                count += 1;
             },
             ByteCode::JumpIfNotZero => {
-                writeln!(out, "cmp BYTE [rdx], 0")?;
-                writeln!(out, "jne L")?;
-                writeln!(out, "L{}:", 0)?;
+                writeln!(out, "cmp BYTE [rsi], 0")?;
+                
+                let count = stack.pop().unwrap();
+                writeln!(out, "jne L{}", count)?;
+                writeln!(out, "L{}_:", count)?;
             },
         }
     }
