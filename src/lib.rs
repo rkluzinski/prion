@@ -29,14 +29,15 @@ impl Config {
 pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
     let source = fs::read_to_string(&config.infile)?;
     
-    let intermediate_code = generate_intermediate_code(&source)?;
+    let bytecode = generate_bytecode(&source)?;
     
-    // optimization intermediate code
+    // optimization passes
+    let bytecode = merge_operations(bytecode);
 
     let assembly_filename = format!("{}.s", config.outfile);
     let object_filename = format!("{}.o", config.outfile);
 
-    generate_assembly(&assembly_filename, &intermediate_code)?;
+    generate_assembly(&assembly_filename, &bytecode)?;
 
     // assemble
     Command::new("nasm")
@@ -58,7 +59,9 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[derive(Copy, Clone)]
 enum ByteCode {
+    NoOperation,
     MovePointer(i64),
     AddToCell(i64),
     WriteByte,
@@ -67,25 +70,24 @@ enum ByteCode {
     JumpIfNotZero,
 }
 
-fn generate_intermediate_code(source: &str) -> Result<Vec<ByteCode>, &'static str> {
-    let mut intermediate: Vec<ByteCode> = Vec::new();
-
+fn generate_bytecode(source: &str) -> Result<Vec<ByteCode>, &'static str> {
+    let mut bytecode: Vec<ByteCode> = Vec::new();
     let mut counter = 0;
 
     for instruction in source.chars() {
         match instruction {
-            '>' => intermediate.push(ByteCode::MovePointer(1)),
-            '<' => intermediate.push(ByteCode::MovePointer(-1)),
-            '+' => intermediate.push(ByteCode::AddToCell(1)),
-            '-' => intermediate.push(ByteCode::AddToCell(-1)),
-            '.' => intermediate.push(ByteCode::WriteByte),
-            ',' => intermediate.push(ByteCode::ReadByte),
+            '>' => bytecode.push(ByteCode::MovePointer(1)),
+            '<' => bytecode.push(ByteCode::MovePointer(-1)),
+            '+' => bytecode.push(ByteCode::AddToCell(1)),
+            '-' => bytecode.push(ByteCode::AddToCell(-1)),
+            '.' => bytecode.push(ByteCode::WriteByte),
+            ',' => bytecode.push(ByteCode::ReadByte),
             '[' => {
-                intermediate.push(ByteCode::JumpIfZero);
+                bytecode.push(ByteCode::JumpIfZero);
                 counter += 1;
             },
             ']' => {
-                intermediate.push(ByteCode::JumpIfNotZero);
+                bytecode.push(ByteCode::JumpIfNotZero);
                 if counter == 0 {
                     return Err("syntax error, missing  opening bracket");
                 }
@@ -99,10 +101,33 @@ fn generate_intermediate_code(source: &str) -> Result<Vec<ByteCode>, &'static st
         return Err("syntax error, missing closing bracket");
     }
 
-    Ok(intermediate)
+    Ok(bytecode)
 }
 
-fn generate_assembly(filename: &String, intermediate: &Vec<ByteCode>) -> Result<(), Box<dyn Error>> {
+fn merge_operations(bytecode: Vec<ByteCode>) -> Vec<ByteCode> {
+    let mut optimized: Vec<ByteCode> = Vec::new();
+
+    for operation in bytecode {
+        let previous = optimized.pop().unwrap_or_else(|| ByteCode::NoOperation);
+
+        match (operation, previous) {
+            (ByteCode::MovePointer(x), ByteCode::MovePointer(y)) => {
+                optimized.push(ByteCode::MovePointer(x + y));
+            },
+            (ByteCode::AddToCell(x), ByteCode::AddToCell(y)) => {
+                optimized.push(ByteCode::AddToCell(x + y));
+            },
+            _ => {
+                optimized.push(previous);
+                optimized.push(operation);
+            },
+        }
+    }
+
+    optimized
+}
+
+fn generate_assembly(filename: &String, bytecode: &Vec<ByteCode>) -> Result<(), Box<dyn Error>> {
     let mut out = File::create(filename)?;
 
     let mut count = 0;
@@ -113,11 +138,12 @@ fn generate_assembly(filename: &String, intermediate: &Vec<ByteCode>) -> Result<
     writeln!(out, "_start:")?;
     writeln!(out, "sub rsp, 1")?;
 
-    // set in advance for system calls
+    // set register in advance for system calls
     writeln!(out, "mov edx, 1")?;
     
-    for instruction in intermediate {
+    for instruction in bytecode {
         match instruction {
+            ByteCode::NoOperation => (),
             ByteCode::MovePointer(x) => writeln!(out, "sub rsp, {}", x)?,
             ByteCode::AddToCell(x) => writeln!(out, "add BYTE [rsp], {}", x)?,
             ByteCode::WriteByte => {
