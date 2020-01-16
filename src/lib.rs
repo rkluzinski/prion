@@ -28,7 +28,9 @@ impl Config {
 
 pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
     let source = fs::read_to_string(&config.infile)?;
+    
     let intermediate_code = generate_intermediate_code(&source)?;
+    
     // optimization intermediate code
 
     let assembly_filename = format!("{}.s", config.outfile);
@@ -109,35 +111,36 @@ fn generate_assembly(filename: &String, intermediate: &Vec<ByteCode>) -> Result<
     writeln!(out, "section .text")?;
     writeln!(out, "global _start")?;
     writeln!(out, "_start:")?;
-    writeln!(out, "sub rsp, 0x8000")?;
-    writeln!(out, "mov rsi, rsp")?;
+    writeln!(out, "sub rsp, 1")?;
+
+    // set in advance for system calls
+    writeln!(out, "mov edx, 1")?;
     
     for instruction in intermediate {
         match instruction {
-            ByteCode::MovePointer(x) => writeln!(out, "add rsi, {}", x)?,
-            ByteCode::AddToCell(x) => writeln!(out, "add BYTE [rsi], {}", x)?,
+            ByteCode::MovePointer(x) => writeln!(out, "sub rsp, {}", x)?,
+            ByteCode::AddToCell(x) => writeln!(out, "add BYTE [rsp], {}", x)?,
             ByteCode::WriteByte => {
                 writeln!(out, "mov eax, 1")?;
                 writeln!(out, "mov edi, 1")?;
-                writeln!(out, "mov edx, 1")?;
+                writeln!(out, "mov rsi, rsp")?;
                 writeln!(out, "syscall")?;
             },
             ByteCode::ReadByte => {
                 writeln!(out, "xor eax, eax")?;
                 writeln!(out, "xor edi, edi")?;
-                writeln!(out, "mov edx, 1")?;
+                writeln!(out, "mov rsi, rsp")?;
                 writeln!(out, "syscall")?;
             },
             ByteCode::JumpIfZero => {
-                writeln!(out, "cmp BYTE [rsi], 0")?;
+                writeln!(out, "cmp BYTE [rsp], 0")?;
                 writeln!(out, "je L{}_", count)?;
                 writeln!(out, "L{}:", count)?;
                 stack.push(count);
                 count += 1;
             },
             ByteCode::JumpIfNotZero => {
-                writeln!(out, "cmp BYTE [rsi], 0")?;
-                
+                writeln!(out, "cmp BYTE [rsp], 0")?;
                 let count = stack.pop().unwrap();
                 writeln!(out, "jne L{}", count)?;
                 writeln!(out, "L{}_:", count)?;
