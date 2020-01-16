@@ -2,5 +2,4 @@
 **/*.rs.bk
 
 /programs
-*.s
-*.o
+/bin

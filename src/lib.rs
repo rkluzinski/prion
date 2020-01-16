@@ -33,6 +33,8 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
     
     // optimization passes
     let bytecode = merge_operations(bytecode);
+    let bytecode = reorder_pointer_moves(bytecode);
+    let bytecode = remove_nops(bytecode);
 
     let assembly_filename = format!("{}.s", config.outfile);
     let object_filename = format!("{}.o", config.outfile);
@@ -62,12 +64,12 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
 #[derive(Copy, Clone)]
 enum ByteCode {
     NoOperation,
-    MovePointer(i64),
-    AddToCell(i64),
-    WriteByte,
-    ReadByte,
-    JumpIfZero,
-    JumpIfNotZero,
+    MovePointer{ offset: i64 },
+    AddToCell{ value: i64, offset: i64 },
+    WriteByte{ offset: i64 },
+    ReadByte{ offset: i64 },
+    JumpIfZero{ offset: i64 },
+    JumpIfNotZero {offset: i64 },
 }
 
 fn generate_bytecode(source: &str) -> Result<Vec<ByteCode>, &'static str> {
@@ -76,18 +78,18 @@ fn generate_bytecode(source: &str) -> Result<Vec<ByteCode>, &'static str> {
 
     for instruction in source.chars() {
         match instruction {
-            '>' => bytecode.push(ByteCode::MovePointer(1)),
-            '<' => bytecode.push(ByteCode::MovePointer(-1)),
-            '+' => bytecode.push(ByteCode::AddToCell(1)),
-            '-' => bytecode.push(ByteCode::AddToCell(-1)),
-            '.' => bytecode.push(ByteCode::WriteByte),
-            ',' => bytecode.push(ByteCode::ReadByte),
+            '>' => bytecode.push(ByteCode::MovePointer{ offset: 1 }),
+            '<' => bytecode.push(ByteCode::MovePointer{ offset: -1 }),
+            '+' => bytecode.push(ByteCode::AddToCell{ value: 1, offset: 0 }),
+            '-' => bytecode.push(ByteCode::AddToCell{ value: -1, offset: 0 }),
+            '.' => bytecode.push(ByteCode::WriteByte{ offset: 0 }),
+            ',' => bytecode.push(ByteCode::ReadByte{ offset: 0 }),
             '[' => {
-                bytecode.push(ByteCode::JumpIfZero);
+                bytecode.push(ByteCode::JumpIfZero{ offset: 0 });
                 counter += 1;
             },
             ']' => {
-                bytecode.push(ByteCode::JumpIfNotZero);
+                bytecode.push(ByteCode::JumpIfNotZero{ offset: 0 });
                 if counter == 0 {
                     return Err("syntax error, missing  opening bracket");
                 }
@@ -111,16 +113,99 @@ fn merge_operations(bytecode: Vec<ByteCode>) -> Vec<ByteCode> {
         let previous = optimized.pop().unwrap_or_else(|| ByteCode::NoOperation);
 
         match (operation, previous) {
-            (ByteCode::MovePointer(x), ByteCode::MovePointer(y)) => {
-                optimized.push(ByteCode::MovePointer(x + y));
+            (ByteCode::MovePointer{ offset: u }, 
+                ByteCode::MovePointer{ offset: v }) => {
+                optimized.push(ByteCode::MovePointer{ offset: u + v });
             },
-            (ByteCode::AddToCell(x), ByteCode::AddToCell(y)) => {
-                optimized.push(ByteCode::AddToCell(x + y));
+            (ByteCode::AddToCell{ value: x, offset: u}, 
+                ByteCode::AddToCell{ value: y, offset: v}) => {
+                    if u == v {
+                        optimized.push(ByteCode::AddToCell{
+                            value: x + y,
+                            offset: u,
+                        });
+                    }
+                    else {
+                        optimized.push(previous);
+                        optimized.push(operation);
+                    }
             },
             _ => {
                 optimized.push(previous);
                 optimized.push(operation);
             },
+        }
+    }
+
+    optimized
+}
+
+fn reorder_pointer_moves(bytecode: Vec<ByteCode>) -> Vec<ByteCode> {
+    let mut optimized: Vec<ByteCode> = Vec::new();
+
+    let mut offset = 0;
+    let mut stack: Vec<i64> = Vec::new();
+
+    for operation in bytecode {
+        match operation {
+            ByteCode::MovePointer{ offset: u } => {
+                offset += u;
+            },
+            ByteCode::AddToCell{ value: x, offset: u } => {
+                optimized.push(ByteCode::AddToCell{
+                    value: x,
+                    offset: u + offset,
+                });
+            },
+            ByteCode::WriteByte{ offset: u } => {
+                optimized.push(ByteCode::WriteByte{ 
+                    offset: u + offset
+                });
+            },
+            ByteCode::ReadByte{ offset: u } => {
+                optimized.push(ByteCode::ReadByte{ 
+                    offset: u + offset
+                });
+            },
+            ByteCode::JumpIfZero{ offset: u } => {
+                stack.push(offset);
+                optimized.push(ByteCode::JumpIfZero{ 
+                    offset: u + offset
+                });
+            },
+            ByteCode::JumpIfNotZero{ offset: u } => {
+                let prev_offset = stack.pop().unwrap();
+                optimized.push(ByteCode::MovePointer{ 
+                    offset : offset - prev_offset,
+                });
+                offset = prev_offset;
+                optimized.push(ByteCode::JumpIfNotZero{ 
+                    offset: u + offset 
+                });
+            },
+            _ => (),
+        }
+    }
+
+    optimized
+}
+
+fn remove_nops(bytecode: Vec<ByteCode>) -> Vec<ByteCode> {
+    let mut optimized: Vec<ByteCode> = Vec::new();
+
+    for operation in bytecode {
+        match operation {
+            ByteCode::MovePointer{ offset: u } => {
+                if u != 0 {
+                    optimized.push(operation);
+                }
+            },
+            ByteCode::AddToCell{ value: x, offset: _ } => {
+                if x != 0 {
+                    optimized.push(operation);
+                }
+            },
+            _ => optimized.push(operation),
         }
     }
 
@@ -144,29 +229,33 @@ fn generate_assembly(filename: &String, bytecode: &Vec<ByteCode>) -> Result<(), 
     for instruction in bytecode {
         match instruction {
             ByteCode::NoOperation => (),
-            ByteCode::MovePointer(x) => writeln!(out, "sub rsp, {}", x)?,
-            ByteCode::AddToCell(x) => writeln!(out, "add BYTE [rsp], {}", x)?,
-            ByteCode::WriteByte => {
+            ByteCode::MovePointer{ offset: u } => {
+                writeln!(out, "sub rsp, {}", u)?;
+            },
+            ByteCode::AddToCell{ value: x, offset: u } => {
+                writeln!(out, "add BYTE [rsp-{}], {}", u, x)?;
+            },
+            ByteCode::WriteByte{ offset: u } => {
                 writeln!(out, "mov eax, 1")?;
                 writeln!(out, "mov edi, 1")?;
-                writeln!(out, "mov rsi, rsp")?;
+                writeln!(out, "lea rsi, [rsp-{}]", u)?;
                 writeln!(out, "syscall")?;
             },
-            ByteCode::ReadByte => {
+            ByteCode::ReadByte{ offset: u } => {
                 writeln!(out, "xor eax, eax")?;
                 writeln!(out, "xor edi, edi")?;
-                writeln!(out, "mov rsi, rsp")?;
+                writeln!(out, "lea rsi, [rsp-{}]", u)?;
                 writeln!(out, "syscall")?;
             },
-            ByteCode::JumpIfZero => {
-                writeln!(out, "cmp BYTE [rsp], 0")?;
+            ByteCode::JumpIfZero{ offset: u } => {
+                writeln!(out, "cmp BYTE [rsp-{}], 0", u)?;
                 writeln!(out, "je L{}_", count)?;
                 writeln!(out, "L{}:", count)?;
                 stack.push(count);
                 count += 1;
             },
-            ByteCode::JumpIfNotZero => {
-                writeln!(out, "cmp BYTE [rsp], 0")?;
+            ByteCode::JumpIfNotZero{ offset: u } => {
+                writeln!(out, "cmp BYTE [rsp-{}], 0", u)?;
                 let count = stack.pop().unwrap();
                 writeln!(out, "jne L{}", count)?;
                 writeln!(out, "L{}_:", count)?;
