@@ -28,7 +28,7 @@ impl Config {
 
 pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
     let source = fs::read_to_string(&config.infile)?;
-    let intermediate_code = generate_intermediate_code(&source);
+    let intermediate_code = generate_intermediate_code(&source)?;
     // optimization intermediate code
 
     let assembly_filename = format!("{}.s", config.outfile);
@@ -57,36 +57,47 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
 }
 
 enum ByteCode {
-    IncrementPointer,
-    DecrementPointer,
-    IncrementCell,
-    DecrementCell,
+    MovePointer(i64),
+    AddToCell(i64),
     WriteByte,
     ReadByte,
     JumpIfZero,
     JumpIfNotZero,
 }
 
-fn generate_intermediate_code(source: &str) -> Vec<ByteCode> {
+fn generate_intermediate_code(source: &str) -> Result<Vec<ByteCode>, &'static str> {
     let mut intermediate: Vec<ByteCode> = Vec::new();
 
-    // TODO this section should validate code as well
+    let mut counter = 0;
 
     for instruction in source.chars() {
         match instruction {
-            '>' => intermediate.push(ByteCode::IncrementPointer),
-            '<' => intermediate.push(ByteCode::DecrementPointer),
-            '+' => intermediate.push(ByteCode::IncrementCell),
-            '-' => intermediate.push(ByteCode::DecrementCell),
+            '>' => intermediate.push(ByteCode::MovePointer(1)),
+            '<' => intermediate.push(ByteCode::MovePointer(-1)),
+            '+' => intermediate.push(ByteCode::AddToCell(1)),
+            '-' => intermediate.push(ByteCode::AddToCell(-1)),
             '.' => intermediate.push(ByteCode::WriteByte),
             ',' => intermediate.push(ByteCode::ReadByte),
-            '[' => intermediate.push(ByteCode::JumpIfZero),
-            ']' => intermediate.push(ByteCode::JumpIfNotZero),
+            '[' => {
+                intermediate.push(ByteCode::JumpIfZero);
+                counter += 1;
+            },
+            ']' => {
+                intermediate.push(ByteCode::JumpIfNotZero);
+                if counter == 0 {
+                    return Err("syntax error, missing  opening bracket");
+                }
+                counter -= 1;
+            }
             _ => (),
         }
     }
 
-    intermediate
+    if counter != 0 {
+        return Err("syntax error, missing closing bracket");
+    }
+
+    Ok(intermediate)
 }
 
 fn generate_assembly(filename: &String, intermediate: &Vec<ByteCode>) -> Result<(), Box<dyn Error>> {
@@ -103,10 +114,8 @@ fn generate_assembly(filename: &String, intermediate: &Vec<ByteCode>) -> Result<
     
     for instruction in intermediate {
         match instruction {
-            ByteCode::IncrementPointer => writeln!(out, "add rsi, 1")?,
-            ByteCode::DecrementPointer => writeln!(out, "sub rsi, 1")?,
-            ByteCode::IncrementCell => writeln!(out, "add BYTE [rsi], 1")?,
-            ByteCode::DecrementCell => writeln!(out, "sub BYTE [rsi], 1")?,
+            ByteCode::MovePointer(x) => writeln!(out, "add rsi, {}", x)?,
+            ByteCode::AddToCell(x) => writeln!(out, "add BYTE [rsi], {}", x)?,
             ByteCode::WriteByte => {
                 writeln!(out, "mov eax, 1")?;
                 writeln!(out, "mov edi, 1")?;
